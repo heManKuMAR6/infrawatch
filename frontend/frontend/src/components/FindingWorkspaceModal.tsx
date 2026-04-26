@@ -143,7 +143,7 @@ function RiskScoreCard({ row }: { row: Row }) {
             </div>
           )}
 
-          {row.timestamp_video && (
+          {Boolean(row.timestamp_video) && (
             <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginBottom: 3 }}>
               {String(row.timestamp_video)}
             </div>
