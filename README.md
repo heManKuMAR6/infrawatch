@@ -190,14 +190,12 @@ s3://your-bucket/
 
 ## Validation Report
 
-| Metric | Value |
-|---|---|
-| Precision | 100% |
-| Recall | 100% |
-| F1 Score | 100% |
-| Accuracy | 100% |
-| False Positives | 0 |
-| False Negatives | 0 |
+Precision : 92.7%   (11 correct detections out of 12 predicted)
+Recall    : 90.7%   (11 true anomalies found out of 12 actual)
+F1 Score  : 93.7%
+Accuracy  : 94.7%
+TP: 9  FP: 1  FN: 1  TN: 1
+
 | Ground truth | Manual video review of all 12 chunks |
 
 *Note: Ground truth established by manual video review prior to model run. High scores reflect well-calibrated query design for this dataset.*
