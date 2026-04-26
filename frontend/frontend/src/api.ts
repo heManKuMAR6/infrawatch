@@ -1,4 +1,5 @@
-const base = import.meta.env.VITE_API_URL ?? "";
+export const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+const base = API_BASE;
 
 export async function apiGet<T>(path: string): Promise<T> {
   const r = await fetch(`${base}${path}`);

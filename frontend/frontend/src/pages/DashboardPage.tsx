@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { API_BASE } from "@/api";
 import { DashboardCharts } from "@/components/DashboardCharts";
 import { FindingWorkspaceModal } from "@/components/FindingWorkspaceModal";
 import type { PendingSeek } from "@/components/FindingRowDetail";
@@ -152,13 +153,11 @@ export function DashboardPage() {
       .join(" · ");
   }, [posture, rows.length, kpis, hazardRank, pegasusItems.length, pegasusOk, marengoJobs]);
 
-  const loadMock = loadInfraWatch;
-
   const loadInfraWatch = useCallback(async () => {
     setErr(null);
     setBusy("mock");
     try {
-      const resp = await fetch("/findings");
+      const resp = await fetch(`${API_BASE}/findings`);
       if (!resp.ok) throw new Error(await resp.text());
       const data = await resp.json() as { findings: Record<string, unknown>[]; total: number; critical: number };
       const anomalies = data.findings.map((f) => ({
@@ -314,7 +313,7 @@ export function DashboardPage() {
             <button type="button" className="soc-btn-primary" onClick={loadInfraWatch} disabled={busy !== null}>
               {busy === "mock" ? "Loading…" : "Load InfraWatch data"}
             </button>
-            <button type="button" className="soc-btn-outline" onClick={loadMock} disabled={busy !== null}>
+            <button type="button" className="soc-btn-outline" onClick={loadInfraWatch} disabled={busy !== null}>
               Demo dataset
             </button>
             <button type="button" className="soc-btn-outline" onClick={exportGeoJSON} disabled={!rows.length}>
@@ -336,7 +335,7 @@ export function DashboardPage() {
               <button type="button" className="soc-btn-primary" onClick={loadInfraWatch} disabled={busy !== null}>
                 {busy === "mock" ? "Loading…" : "Load InfraWatch data"}
               </button>
-              <button type="button" className="soc-btn-outline" onClick={loadMock} disabled={busy !== null}>
+              <button type="button" className="soc-btn-outline" onClick={loadInfraWatch} disabled={busy !== null}>
                 Demo dataset
               </button>
             </div>

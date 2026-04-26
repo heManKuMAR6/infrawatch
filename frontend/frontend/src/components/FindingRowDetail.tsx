@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { API_BASE } from "@/api";
 import { TimelineMatrix } from "@/components/TimelineMatrix";
 import {
   binIndexForTime,
@@ -186,7 +187,7 @@ export function FindingRowDetail({ row, rowId, pendingSeek, onConsumedSeek, vari
     if (!videoName) { setClipInfo(null); return; }
     setClipInfo(null);
     setClipLoading(true);
-    fetch(`/api/clip/file/${encodeURIComponent(videoName)}`)
+    fetch(`${API_BASE}/api/clip/file/${encodeURIComponent(videoName)}`)
       .then((r) => r.ok ? r.json() : Promise.reject(r.statusText))
       .then((d: { url: string; start: number; end: number }) => setClipInfo(d))
       .catch(() => setClipInfo(null))

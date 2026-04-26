@@ -1,6 +1,7 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
+import { API_BASE } from "@/api";
 
 // ── 33-point closed patrol loop around TX-447 [lon, lat] ─────────────────────
 const ROUTE: [number, number][] = [
@@ -387,7 +388,7 @@ export function InfraWatchLiveMap({
         popup.on("open", () => {
           if (clipFetched) return;
           clipFetched = true;
-          fetch(`/api/clip/file/${encodeURIComponent(f.finding_id)}`)
+          fetch(`${API_BASE}/api/clip/file/${encodeURIComponent(f.finding_id)}`)
             .then((r) => (r.ok ? (r.json() as Promise<{ url: string; start: number; end: number }>) : Promise.reject(r.status)))
             .then((d) => {
               const video = document.createElement("video");

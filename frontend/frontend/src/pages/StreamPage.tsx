@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { API_BASE } from "@/api";
 import { TopBar } from "@/components/TopBar";
 import { InfraWatchLiveMap, type LiveDronePos, type LiveFinding } from "@/components/InfraWatchLiveMap";
 
@@ -80,7 +81,7 @@ export function StreamPage({ embedded = false }: Props) {
     setStatus("Initializing inspection…");
     setStreaming(true);
 
-    const es = new EventSource("/stream?speed=1");
+    const es = new EventSource(`${API_BASE}/stream?speed=1`);
     esRef.current = es;
 
     es.addEventListener("start", (e) => {

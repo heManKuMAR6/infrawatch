@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { API_BASE } from "@/api";
 import { TopBar } from "@/components/TopBar";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -523,8 +524,8 @@ export function ConnectivityPage({ embedded = false }: Props) {
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      fetch("/chunks").then((r) => (r.ok ? r.json() : Promise.reject(r.statusText))),
-      fetch("/findings").then((r) => (r.ok ? r.json() : Promise.reject(r.statusText))),
+      fetch(`${API_BASE}/chunks`).then((r) => (r.ok ? r.json() : Promise.reject(r.statusText))),
+      fetch(`${API_BASE}/findings`).then((r) => (r.ok ? r.json() : Promise.reject(r.statusText))),
     ])
       .then(([cd, fd]) => {
         if (cancelled) return;
