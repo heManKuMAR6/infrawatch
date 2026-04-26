@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiGet, apiPostJson } from "@/api";
 import { DashboardCharts } from "@/components/DashboardCharts";
 import { FindingWorkspaceModal } from "@/components/FindingWorkspaceModal";
 import type { PendingSeek } from "@/components/FindingRowDetail";
@@ -153,18 +152,7 @@ export function DashboardPage() {
       .join(" · ");
   }, [posture, rows.length, kpis, hazardRank, pegasusItems.length, pegasusOk, marengoJobs]);
 
-  const loadMock = useCallback(async () => {
-    setErr(null);
-    setBusy("mock");
-    try {
-      const b = await apiGet<Record<string, unknown>>("/api/bundle/mock");
-      setBundle(b);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  }, [setBundle]);
+  const loadMock = loadInfraWatch;
 
   const loadInfraWatch = useCallback(async () => {
     setErr(null);
@@ -231,30 +219,36 @@ export function DashboardPage() {
     }
   }, [setBundle]);
 
-  const exportSigned = useCallback(async () => {
-    if (!bundle || !rows.length) return;
-    setErr(null);
-    setBusy("export");
-    try {
-      const data = await apiPostJson<{ geojson: unknown; jwt: string }>("/api/export/signed", { bundle });
-      const gj = new Blob([JSON.stringify(data.geojson, null, 2)], { type: "application/geo+json" });
-      const jwtBlob = new Blob([data.jwt], { type: "text/plain" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(gj);
-      a.download = "findings.geojson";
-      a.click();
-      URL.revokeObjectURL(a.href);
-      const b = document.createElement("a");
-      b.href = URL.createObjectURL(jwtBlob);
-      b.download = "findings.geojson.jwt";
-      b.click();
-      URL.revokeObjectURL(b.href);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  }, [bundle, rows.length]);
+  const exportGeoJSON = useCallback(() => {
+    if (!rows.length) return;
+    const features = rows.map((r) => ({
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [num(r.lon, -90), num(r.lat, 38)],
+      },
+      properties: {
+        id: r.id ?? r.asset_name,
+        asset_name: r.asset_name,
+        risk_level: r.risk_level ?? String(r.severity ?? "").toUpperCase(),
+        severity: r.severity,
+        composite_risk_score: r.composite_risk_score ?? Math.round(num(r.quantum_risk_index) * 100),
+        anomaly_type: r.marengo_top_match,
+        timestamp_video: r.timestamp_video,
+        regulatory_violations: r.regulatory_violations ?? [],
+        recommended_action: (r.pegasus_report as Record<string, unknown> | undefined)?.recommended_action ?? "",
+        people_present: r.people_present ?? false,
+        animals_present: r.animals_present ?? false,
+      },
+    }));
+    const geojson = { type: "FeatureCollection", features };
+    const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: "application/geo+json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "infrawatch-findings.geojson";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, [rows]);
 
   const kpiDefs = useMemo(
     () => [
@@ -323,8 +317,8 @@ export function DashboardPage() {
             <button type="button" className="soc-btn-outline" onClick={loadMock} disabled={busy !== null}>
               Demo dataset
             </button>
-            <button type="button" className="soc-btn-outline" onClick={exportSigned} disabled={!rows.length || busy !== null}>
-              {busy === "export" ? "Exporting…" : "Export GeoJSON + JWT"}
+            <button type="button" className="soc-btn-outline" onClick={exportGeoJSON} disabled={!rows.length}>
+              Export GeoJSON
             </button>
           </div>
         </div>

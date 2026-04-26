@@ -16,7 +16,7 @@ export function socPanelTitle(p: SocPanel): string {
     case "stream":
       return "Live SSE telemetry";
     case "connectivity":
-      return "Connectivity matrix";
+      return "Pipeline analytics";
     default:
       return "";
   }
@@ -29,7 +29,7 @@ export function socPanelSubtitle(p: SocPanel): string {
     case "stream":
       return "Chunked fusion stream: 30s segments, Marengo + Pegasus, composite findings, closing report.";
     case "connectivity":
-      return "Pre-flight probes across AWS, Bedrock, data plane APIs, and optional IBM Quantum.";
+      return "TX-447 St. Louis corridor · 12 segments · Pegasus 1.2 + Marengo 3.0 · AWS Bedrock";
     default:
       return "";
   }

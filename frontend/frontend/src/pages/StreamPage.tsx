@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TopBar } from "@/components/TopBar";
-import { InfraWatchLiveMap, type LiveFinding } from "@/components/InfraWatchLiveMap";
+import { InfraWatchLiveMap, type LiveDronePos, type LiveFinding } from "@/components/InfraWatchLiveMap";
 
 type SensorData = {
   methane_ppm: number;
@@ -55,6 +55,7 @@ export function StreamPage({ embedded = false }: Props) {
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("Ready to inspect TX-447");
   const [progress, setProgress] = useState(0);
+  const [dronePos, setDronePos] = useState<LiveDronePos | null>(null);
   const [sensor, setSensor] = useState<SensorData>({
     methane_ppm: 1.82,
     temp_differential_c: 1.5,
@@ -75,6 +76,7 @@ export function StreamPage({ embedded = false }: Props) {
     setFindings([]);
     setProgress(0);
     setSummary(null);
+    setDronePos(null);
     setStatus("Initializing inspection…");
     setStreaming(true);
 
@@ -84,6 +86,11 @@ export function StreamPage({ embedded = false }: Props) {
     es.addEventListener("start", (e) => {
       const d = JSON.parse(e.data) as { total_chunks: number };
       setStatus(`Processing ${d.total_chunks} chunks · TX-447 St. Louis corridor`);
+    });
+
+    es.addEventListener("position", (e) => {
+      const d = JSON.parse(e.data) as { lat: number; lon: number; chunk_index: number };
+      setDronePos({ lat: d.lat, lon: d.lon, chunk_index: d.chunk_index });
     });
 
     es.addEventListener("sensor", (e) => {
@@ -101,9 +108,9 @@ export function StreamPage({ embedded = false }: Props) {
 
     es.addEventListener("finding", (e) => {
       const d = JSON.parse(e.data) as Omit<LiveFinding, "chunk_index">;
-      // Derive 0-based chunk_index from finding_id ("chunk_0030" → startSec=30 → index=1)
+      // Derive 1-based chunk_index from finding_id ("chunk_0000"→1, "chunk_0030"→2, …)
       const startSec = parseInt(d.finding_id.replace("chunk_", ""), 10) || 0;
-      const chunk_index = startSec / 30;
+      const chunk_index = startSec / 30 + 1;
       setFindings((prev) =>
         [...prev, { ...d, chunk_index }].sort((a, b) => b.composite_risk_score - a.composite_risk_score),
       );
@@ -168,11 +175,7 @@ export function StreamPage({ embedded = false }: Props) {
             <div style={{ flex: 1, overflow: "hidden" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                 {streaming && (
-                  <span
-                    style={{ color: "var(--accent)", fontSize: 10, lineHeight: 1 }}
-                  >
-                    ●
-                  </span>
+                  <span style={{ color: "var(--accent)", fontSize: 10, lineHeight: 1 }}>●</span>
                 )}
                 <span
                   style={{
@@ -213,7 +216,7 @@ export function StreamPage({ embedded = false }: Props) {
               overflow: "hidden", background: "var(--bg-surface)",
             }}
           >
-            <InfraWatchLiveMap streaming={streaming} findings={findings} />
+            <InfraWatchLiveMap dronePos={dronePos} findings={findings} streaming={streaming} />
           </div>
 
           {/* Completion banner */}
@@ -240,21 +243,11 @@ export function StreamPage({ embedded = false }: Props) {
               { label: "HIGH",     value: highCount,       color: "var(--warn)" },
               { label: "MEDIUM",   value: mediumCount,     color: "#f97316" },
             ].map(({ label, value, color }) => (
-              <div
-                key={label}
-                className="soc-kpi"
-                style={{ textAlign: "center", padding: "10px 4px" }}
-              >
-                <div
-                  className="soc-kpi-value"
-                  style={{ color, fontSize: 20, transition: "color .3s" }}
-                >
+              <div key={label} className="soc-kpi" style={{ textAlign: "center", padding: "10px 4px" }}>
+                <div className="soc-kpi-value" style={{ color, fontSize: 20, transition: "color .3s" }}>
                   {value}
                 </div>
-                <div
-                  className="soc-kpi-label"
-                  style={{ fontSize: 8, letterSpacing: "0.06em" }}
-                >
+                <div className="soc-kpi-label" style={{ fontSize: 8, letterSpacing: "0.06em" }}>
                   {label}
                 </div>
               </div>
@@ -297,20 +290,14 @@ export function StreamPage({ embedded = false }: Props) {
           </div>
 
           {/* Anomaly log */}
-          <div
-            className="soc-panel"
-            style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 160 }}
-          >
+          <div className="soc-panel" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 160 }}>
             <div className="soc-panel-head">
               <span className="soc-panel-title">Anomaly log</span>
               <span className="soc-panel-tag">{findings.length} findings</span>
             </div>
             <div className="soc-panel-body" style={{ flex: 1, overflowY: "auto" }}>
               {findings.length === 0 ? (
-                <div
-                  className="soc-empty"
-                  style={{ border: "none", padding: "1.5rem 0" }}
-                >
+                <div className="soc-empty" style={{ border: "none", padding: "1.5rem 0" }}>
                   <p style={{ margin: 0 }}>
                     {streaming ? "Scanning for anomalies…" : "Start inspection to detect anomalies."}
                   </p>
@@ -351,24 +338,14 @@ export function StreamPage({ embedded = false }: Props) {
                             {f.risk_level}
                           </span>
                         </div>
-                        <span
-                          style={{
-                            fontSize: 10, color: "var(--text-muted)",
-                            fontFamily: "var(--font-mono)",
-                          }}
-                        >
+                        <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
                           {f.timestamp_video}
                         </span>
                       </div>
                       <div style={{ fontSize: 12, color: "var(--text)", marginBottom: 3 }}>
                         {(f.anomaly_type ?? "").replace(/_/g, " ")}
                       </div>
-                      <div
-                        style={{
-                          fontSize: 10, color: "var(--text-muted)",
-                          fontFamily: "var(--font-mono)",
-                        }}
-                      >
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
                         Score {f.composite_risk_score}/100
                       </div>
                     </div>

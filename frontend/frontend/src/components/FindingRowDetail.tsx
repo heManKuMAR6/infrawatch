@@ -216,8 +216,9 @@ export function FindingRowDetail({ row, rowId, pendingSeek, onConsumedSeek, vari
     setT(el.currentTime);
     const info = clipInfoRef.current;
     if (info && el.currentTime >= info.end) {
-      el.pause();
-      el.currentTime = info.end;
+      // Loop back to clip start instead of stopping
+      el.currentTime = info.start;
+      void el.play();
     }
   }, []);
 
@@ -396,6 +397,9 @@ export function FindingRowDetail({ row, rowId, pendingSeek, onConsumedSeek, vari
               ref={videoRef}
               src={clipInfo.url}
               controls
+              autoPlay
+              muted
+              playsInline
               className="soc-finding-video"
               onTimeUpdate={onTimeUpdate}
               onLoadedMetadata={onLoadedMeta}

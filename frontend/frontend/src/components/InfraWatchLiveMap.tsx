@@ -2,8 +2,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
 
-// ── 29-point closed patrol loop around TX-447 [lon, lat] ─────────────────────
-// Indices 25-28 from the original 33-point route removed (far-south detour)
+// ── 33-point closed patrol loop around TX-447 [lon, lat] ─────────────────────
 const ROUTE: [number, number][] = [
   [-90.1876, 38.6089], [-90.1862, 38.6094], [-90.1848, 38.6100],
   [-90.1835, 38.6103], [-90.1821, 38.6108], [-90.1790, 38.6120],
@@ -13,13 +12,26 @@ const ROUTE: [number, number][] = [
   [-90.2456, 38.6334], [-90.2341, 38.6378], [-90.2200, 38.6350],
   [-90.2100, 38.6340], [-90.2000, 38.6340], [-90.1900, 38.6380],
   [-90.1780, 38.6420], [-90.1654, 38.6445], [-90.1590, 38.6470],
-  [-90.1532, 38.6489], [-90.2300, 38.6100],
+  [-90.1532, 38.6489], [-90.2400, 38.6512], [-90.2789, 38.6512],
+  [-90.2700, 38.6400], [-90.2500, 38.6200], [-90.2300, 38.6100],
   [-90.2123, 38.6023], [-90.2000, 38.6050], [-90.1876, 38.6089],
 ];
 
-// 0-based chunk_index → route waypoint (chunk 0→[0], 1→[3], 2→[6], …, 9→[27])
-function chunkToRouteIdx(ci: number): number {
-  return Math.min(ci * 3, ROUTE.length - 1);
+// Snap a GPS coordinate to the nearest ROUTE waypoint index
+function nearestRouteIdx(lat: number, lon: number): number {
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < ROUTE.length; i++) {
+    const d = (ROUTE[i][1] - lat) ** 2 + (ROUTE[i][0] - lon) ** 2;
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+// Map chunk_index (1-based, 1-12) → route waypoint index (0-32)
+// Allows reaching ROUTE[32] so the drone completes the full closed loop
+function chunkToRouteIdx(chunkIndex: number): number {
+  return Math.min(Math.floor((chunkIndex * 32) / 11), ROUTE.length - 1);
 }
 
 const RISK_COLORS: Record<string, string> = {
@@ -38,13 +50,19 @@ const RISK_SIZES: Record<string, number> = {
 
 export type LiveFinding = {
   finding_id: string;
-  chunk_index: number; // 0-based, derived from finding_id by caller
+  chunk_index: number; // 1-based, derived from finding_id by caller
   lat: number;
   lon: number;
   risk_level: string;
   anomaly_type: string;
   composite_risk_score: number;
   timestamp_video: string;
+};
+
+export type LiveDronePos = {
+  lat: number;
+  lon: number;
+  chunk_index: number; // 1-based, from SSE position event
 };
 
 // ── Animation types ───────────────────────────────────────────────────────────
@@ -55,29 +73,37 @@ type FindingEntry = {
   color: string;
   shadowBase: string;
   dotEl: HTMLElement;
-  ringEl: HTMLElement | null;
   marker: maplibregl.Marker;
 };
 
 type AnimState = {
   rafId: number;
   frameCount: number;
-  animStartTs: number | null; // null = not yet started
-  lastRoutePos: number;       // last computed floating route position (0..28)
+  currentSeg: number; // which segment the drone is animating FROM
+  targetIdx: number;  // destination route index
+  segStartTs: number; // performance.now() when current segment started
+  moving: boolean;
 };
 
-const LOOP_DURATION_MS = 360000; // 6 minutes = one full inspection loop
+const SEG_DURATION_MS  = 1200; // 1.2 s per waypoint segment — keeps pace with speed=1 SSE
 const TRAIL_MAX_PTS    = 400;
 const TRAIL_UPD_FRAMES = 3;
+
+// Cubic ease-in-out
+function cubicEase(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function InfraWatchLiveMap({
-  streaming,
+  dronePos,
   findings,
+  streaming,
 }: {
-  streaming: boolean;
+  dronePos: LiveDronePos | null;
   findings: LiveFinding[];
+  streaming: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<maplibregl.Map | null>(null);
@@ -89,8 +115,10 @@ export function InfraWatchLiveMap({
   const animRef = useRef<AnimState>({
     rafId: 0,
     frameCount: 0,
-    animStartTs: null,
-    lastRoutePos: 0,
+    currentSeg: 0,
+    targetIdx: 0,
+    segStartTs: 0,
+    moving: false,
   });
 
   // ── Mount: create map, layers, drone, start rAF loop ─────────────────────
@@ -195,19 +223,23 @@ export function InfraWatchLiveMap({
         const m     = mapRef.current;
         if (!drone || !m) return;
 
-        let lngLat: [number, number] = ROUTE[0];
+        // Compute drone position along route
+        let lngLat: [number, number] = ROUTE[Math.min(anim.currentSeg, ROUTE.length - 1)];
 
-        if (anim.animStartTs !== null) {
-          const elapsed  = now - anim.animStartTs;
-          const fraction = Math.min(elapsed / LOOP_DURATION_MS, 1.0);
-          const routePos = fraction * (ROUTE.length - 1); // 0..28
-          anim.lastRoutePos = routePos;
+        if (anim.moving && anim.currentSeg < anim.targetIdx) {
+          const elapsed = now - anim.segStartTs;
+          const t = Math.min(elapsed / SEG_DURATION_MS, 1);
+          const frac = cubicEase(t);
 
-          const segIdx = Math.min(Math.floor(routePos), ROUTE.length - 2);
-          const interp = routePos - Math.floor(routePos);
-          const p0 = ROUTE[segIdx];
-          const p1 = ROUTE[segIdx + 1];
-          lngLat = [p0[0] + (p1[0] - p0[0]) * interp, p0[1] + (p1[1] - p0[1]) * interp];
+          const p0 = ROUTE[anim.currentSeg];
+          const p1 = ROUTE[Math.min(anim.currentSeg + 1, ROUTE.length - 1)];
+          lngLat = [p0[0] + (p1[0] - p0[0]) * frac, p0[1] + (p1[1] - p0[1]) * frac];
+
+          if (t >= 1) {
+            anim.currentSeg = Math.min(anim.currentSeg + 1, ROUTE.length - 1);
+            anim.segStartTs = now;
+            if (anim.currentSeg >= anim.targetIdx) anim.moving = false;
+          }
         }
 
         drone.setLngLat(lngLat);
@@ -224,18 +256,15 @@ export function InfraWatchLiveMap({
           }
         }
 
-        // Finding passage: highlight when drone crosses a finding's route waypoint
-        const currentRouteIdx = Math.floor(anim.lastRoutePos);
+        // Finding passage: trigger highlight when drone reaches the finding's route waypoint
         for (const entry of entriesRef.current) {
-          if (!passedRef.current.has(entry.id) && currentRouteIdx >= entry.routeIdx) {
+          if (!passedRef.current.has(entry.id) && anim.currentSeg >= entry.routeIdx) {
             passedRef.current.add(entry.id);
             entry.dotEl.style.boxShadow = `0 0 28px ${entry.color}, 0 0 10px white`;
             entry.dotEl.style.transform = "scale(1.5)";
-            if (entry.ringEl) entry.ringEl.style.animationDuration = "0.45s";
             setTimeout(() => {
               entry.dotEl.style.boxShadow = entry.shadowBase;
               entry.dotEl.style.transform = "";
-              if (entry.ringEl) entry.ringEl.style.animationDuration = "1.6s";
             }, 3000);
           }
         }
@@ -258,21 +287,50 @@ export function InfraWatchLiveMap({
     };
   }, []);
 
-  // ── streaming → start clock-based loop ───────────────────────────────────
+  // ── Inspection complete → finish the loop ────────────────────────────────
   useEffect(() => {
-    const anim = animRef.current;
-    if (streaming) {
-      anim.animStartTs  = performance.now();
-      anim.lastRoutePos = 0;
-      trailRef.current  = [ROUTE[0], ROUTE[0]];
-      passedRef.current.clear();
-      // Clear finding entries so they re-register passage triggers on restart
-      entriesRef.current.forEach((e) => e.marker.remove());
-      entriesRef.current = [];
+    if (!streaming) {
+      const anim = animRef.current;
+      // If drone hasn't reached the end yet, let it finish the remaining segments
+      if (anim.currentSeg < ROUTE.length - 1) {
+        anim.targetIdx = ROUTE.length - 1;
+        if (!anim.moving) {
+          anim.moving = true;
+          anim.segStartTs = performance.now();
+        }
+      }
     }
   }, [streaming]);
 
-  // ── New findings → place markers snapped to route ────────────────────────
+  // ── dronePos null → new inspection starting, reset drone home ────────────
+  useEffect(() => {
+    if (!dronePos) {
+      const anim = animRef.current;
+      anim.currentSeg  = 0;
+      anim.targetIdx   = 0;
+      anim.moving      = false;
+      trailRef.current = [ROUTE[0], ROUTE[0]];
+      passedRef.current.clear();
+      if (droneRef.current) droneRef.current.setLngLat(ROUTE[0]);
+    }
+  }, [dronePos]);
+
+  // ── New dronePos → update animation target ────────────────────────────────
+  useEffect(() => {
+    if (!dronePos) return;
+    const anim = animRef.current;
+    const targetIdx = chunkToRouteIdx(dronePos.chunk_index);
+
+    if (targetIdx <= anim.currentSeg) return; // never go backward
+
+    anim.targetIdx = targetIdx;
+    if (!anim.moving) {
+      anim.moving = true;
+      anim.segStartTs = performance.now();
+    }
+  }, [dronePos]);
+
+  // ── New findings → place markers snapped to route ─────────────────────────
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -284,56 +342,77 @@ export function InfraWatchLiveMap({
         const color    = RISK_COLORS[risk] ?? "#30D158";
         const size     = RISK_SIZES[risk] ?? 7;
         const isCrit   = risk === "CRITICAL";
-        const routeIdx = chunkToRouteIdx(f.chunk_index);
+        // Snap to nearest route waypoint using actual GPS — guaranteed on-path
+        const routeIdx = nearestRouteIdx(f.lat, f.lon);
         const snapped  = ROUTE[routeIdx];
 
-        const wrap = document.createElement("div");
-        wrap.style.cssText =
-          "position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer";
-        wrap.style.width  = `${size + 24}px`;
-        wrap.style.height = `${size + 24}px`;
-
-        let ringEl: HTMLElement | null = null;
-        if (isCrit) {
-          ringEl = document.createElement("div");
-          ringEl.style.cssText = [
-            `width:${size + 16}px`, `height:${size + 16}px`,
-            "border-radius:50%",
-            `border:2.5px solid ${color}`,
-            "position:absolute",
-            "animation:critPulse 1.6s ease-in-out infinite",
-            "pointer-events:none",
-          ].join(";");
-          wrap.appendChild(ringEl);
-        }
-
-        const shadowBase = `0 0 ${isCrit ? 18 : 8}px ${color}`;
+        const shadowBase = `0 0 ${isCrit ? 16 : 7}px ${color}`;
         const dotEl = document.createElement("div");
         dotEl.style.cssText = [
           `width:${size}px`, `height:${size}px`,
           "border-radius:50%",
           `background:${color}`,
-          `border:${isCrit ? "2.5" : "1.5"}px solid rgba(255,255,255,${isCrit ? "0.95" : "0.8"})`,
+          `border:2px solid rgba(255,255,255,0.9)`,
           `box-shadow:${shadowBase}`,
-          "position:relative",
+          "cursor:pointer",
           "transition:box-shadow .25s, transform .25s",
         ].join(";");
-        wrap.appendChild(dotEl);
 
-        const marker = new maplibregl.Marker({ element: wrap, anchor: "center" })
+        // ── Popup with lazy-loaded video clip ───────────────────────────────
+        const popupEl = document.createElement("div");
+        popupEl.style.cssText = "font-family:system-ui;font-size:12px;line-height:1.55;padding:2px 0;min-width:220px";
+
+        const metaEl = document.createElement("div");
+        metaEl.innerHTML = [
+          `<strong style="color:${color}">${f.risk_level}</strong>`,
+          `&nbsp;—&nbsp;${(f.anomaly_type ?? "").replace(/_/g, " ")}<br>`,
+          `Score: <strong>${f.composite_risk_score}/100</strong>`,
+          `&nbsp;·&nbsp;<span style="color:#888">${f.timestamp_video}</span>`,
+        ].join("");
+        popupEl.appendChild(metaEl);
+
+        const thumbEl = document.createElement("div");
+        thumbEl.style.cssText = [
+          "margin-top:8px", "border-radius:5px", "overflow:hidden",
+          "background:#0d0d0d", "aspect-ratio:16/9",
+          "display:flex", "align-items:center", "justify-content:center",
+        ].join(";");
+        thumbEl.innerHTML = '<span style="color:#444;font-size:10px;font-family:monospace">loading clip…</span>';
+        popupEl.appendChild(thumbEl);
+
+        const popup = new maplibregl.Popup({ maxWidth: "270px", closeButton: true, offset: 14 });
+        popup.setDOMContent(popupEl);
+
+        let clipFetched = false;
+        popup.on("open", () => {
+          if (clipFetched) return;
+          clipFetched = true;
+          fetch(`/api/clip/file/${encodeURIComponent(f.finding_id)}`)
+            .then((r) => (r.ok ? (r.json() as Promise<{ url: string; start: number; end: number }>) : Promise.reject(r.status)))
+            .then((d) => {
+              const video = document.createElement("video");
+              video.style.cssText = "width:100%;display:block;border-radius:4px";
+              video.muted = true;
+              video.playsInline = true;
+              video.loop = true;
+              video.src = d.url;
+              video.currentTime = d.start + 2;
+              video.addEventListener("canplay", () => void video.play(), { once: true });
+              thumbEl.innerHTML = "";
+              thumbEl.style.aspectRatio = "16/9";
+              thumbEl.appendChild(video);
+            })
+            .catch(() => {
+              thumbEl.innerHTML = '<span style="color:#444;font-size:10px;font-family:monospace">clip unavailable</span>';
+            });
+        });
+
+        const marker = new maplibregl.Marker({ element: dotEl, anchor: "center" })
           .setLngLat(snapped)
-          .setPopup(
-            new maplibregl.Popup({ maxWidth: "220px", closeButton: false }).setHTML(`
-              <div style="font-family:system-ui;font-size:12px;line-height:1.6;padding:2px 0">
-                <strong style="color:${color}">${f.risk_level}</strong>
-                &nbsp;—&nbsp;${(f.anomaly_type ?? "").replace(/_/g, " ")}<br>
-                Score: <strong>${f.composite_risk_score}/100</strong><br>
-                <span style="color:#888">${f.timestamp_video}</span>
-              </div>`),
-          )
+          .setPopup(popup)
           .addTo(map);
 
-        entriesRef.current.push({ id: f.finding_id, routeIdx, color, shadowBase, dotEl, ringEl, marker });
+        entriesRef.current.push({ id: f.finding_id, routeIdx, color, shadowBase, dotEl, marker });
       });
     };
 

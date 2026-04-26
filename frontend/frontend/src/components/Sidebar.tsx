@@ -6,7 +6,7 @@ const items: { panel: SocPanel | null; label: string; icon: string }[] = [
   { panel: null, label: "Command center", icon: "◆" },
   { panel: "analysis", label: "Live analysis", icon: "▶" },
   { panel: "stream", label: "SSE stream", icon: "≋" },
-  { panel: "connectivity", label: "Connectivity", icon: "◎" },
+  { panel: "connectivity", label: "Analytics", icon: "◈" },
 ];
 
 export function Sidebar() {
